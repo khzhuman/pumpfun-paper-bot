@@ -316,14 +316,11 @@ await runBot({
           invested: amount,
           exiting: false,
           filled: false,
-          lastAddPrice: price,
+          lastAddPrice: priceOf(curve.virtual_quote_reserves, curve.virtual_token_reserves),
           lastValue: 0,
         });
         t.entries++;
         slotsLeft--;
-      } else {
-        h.invested += amount;
-        h.lastAddPrice = price;
       }
     }
 
