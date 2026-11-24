@@ -6,7 +6,9 @@
 // least 2 SOL of real reserves within its first few slots, the creator put
 // up to 2.5 SOL of their own money in the create slot, at most one other
 // wallet has bought in yet (a launch bundled by many wallets is a dump in
-// waiting), and the creator has not sold a token. One small fixed buy per
+// waiting), and the creator has not sold a token. Coins first seen through
+// a trade, with no CreateEvent, are never bought: their launch was missed
+// and buying them would mean buying the top. One small fixed buy per
 // coin, out fast: take profit at +20%, cut at -12%, never hold past 30
 // slots, and leave at once if the creator sells. A small probe trade keeps
 // the run on pace for the guardrail bar (20+ coins) when sniper entries
@@ -100,7 +102,11 @@ await runBot({
       if (e.event === 'CreateEvent') {
         launchOf(e.mint, e.creator, e.slot);
       } else if (e.event === 'TradeEvent') {
-        const l = launchOf(e.mint, e.creator, e.slot);
+        // Only track coins we saw created: a trade without a CreateEvent is
+        // an older coin whose launch we missed, and buying it as a fresh
+        // launch means buying its top.
+        const l = launches.get(e.mint);
+        if (l === undefined) continue;
         const sol = Number(e.sol_amount) / LAMPORTS;
         if (e.user === l.creator) {
           if (e.is_buy) {
