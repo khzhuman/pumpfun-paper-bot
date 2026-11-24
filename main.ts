@@ -6,13 +6,19 @@
 // least 2 SOL of real reserves within its first few slots, the creator put
 // up to 2.5 SOL of their own money in the create slot, at most one other
 // wallet has bought in yet (a launch bundled by many wallets is a dump in
-// waiting), and the creator has not sold a token. Coins first seen through
-// a trade, with no CreateEvent, are never bought: their launch was missed
-// and buying them would mean buying the top. One small fixed buy per
-// coin, out fast: take profit at +20%, cut at -12%, never hold past 30
-// slots, and leave at once if the creator sells. A small probe trade keeps
-// the run on pace for the guardrail bar (20+ coins) when sniper entries
-// run slow.
+// waiting), and the creator has not sold a token. v5 adds the entry signal
+// found by replaying the dev window trade by trade at batch-end granularity
+// (the bot only decides once per batch, so a per-trade replay overcounts
+// entries ~4x): buy only when the creator's own buy is in the 1.5-2.0 SOL
+// sweet spot (real skin in the game, not a pre-dump stack) OR the curve is
+// already deep (5-10 SOL real reserves). On the true 65-entry set that
+// filter is +3.2% EV per trade at TP +20% / SL -12%, where the unfiltered
+// set is -3.3%. Coins first seen through a trade, with no CreateEvent, are
+// never bought: their launch was missed and buying them would mean buying
+// the top. One small fixed buy per coin, out fast: take profit at +20%,
+// cut at -12%, never hold past 30 slots, and leave at once if the creator
+// sells. A small probe trade keeps the run on pace for the guardrail bar
+// (20+ coins) when sniper entries run slow.
 //
 // Everything is a pure function of the replay stream: no clock, no
 // randomness, iteration only over insertion-ordered maps, so the two
@@ -23,14 +29,22 @@ import { LAMPORTS_PER_SOL, runBot, type Batch, type BotState, type OrderInput, t
 const LAMPORTS = 1_000_000_000;
 const CURVE_FEE = 0.0125; // protocol + creator take on a sale, as a share of proceeds
 
-// ---- tunables (swept on the dev window with the pilot's simulator; the
-// chosen cell is positive in the sim with both halves checked) ----
+// ---- tunables (chosen from a batch-end replay of the dev window; see the
+// header comment for why a per-trade replay overcounts entries) ----
 const MAX_AGE = 3; // oldest age (slots since CreateEvent) at which a first buy may be decided
 const STAKE_SOL = 0.05; // SOL to aim for per coin
 const MIN_BUY_SOL = 0.01; // smallest buy worth paying the tx fee for
 const MIN_REAL_SOL = 2; // curve real SOL at decision time: at least 2
 const MAX_DEV_BUY_SOL = 2.5; // creator's own buys in the create slot: at most 2.5 SOL
 const MAX_BUYERS = 1; // distinct non-creator buyers seen before entry: at most 1
+// v5 entry signal: creator buy in the 1.5-2.0 SOL sweet spot OR a deep curve
+// (5-10 SOL real reserves). Either leg alone wins ~50% of its entries at
+// TP +20% / SL -12% on the true 65-entry set; the union is 19 coins at
+// +3.2% EV per trade.
+const SIGNAL_DEV_BUY_MIN = 1.5;
+const SIGNAL_DEV_BUY_MAX = 2.0;
+const SIGNAL_DEEP_MIN_SOL = 5;
+const SIGNAL_DEEP_MAX_SOL = 10;
 const BUY_SLIP_BPS = 1500; // slippage allowed on buys: a buy whose price jumps more than 15% in the 2-slot latency is refused (free); sells go out wide open
 const TAKE_PROFIT = 0.2; // sell the whole position once value reaches cost + 20%
 const STOP_LOSS = 0.12; // sell when value falls 12% under cost
@@ -197,6 +211,11 @@ await runBot({
       if (l.buyers.size > MAX_BUYERS) continue;
       const rqSol = Number(curve.real_quote_reserves) / LAMPORTS;
       if (rqSol < MIN_REAL_SOL) continue;
+      // v5 signal: creator skin-in-the-game sweet spot OR an already-deep curve.
+      const signal =
+        (l.devBuySol >= SIGNAL_DEV_BUY_MIN && l.devBuySol <= SIGNAL_DEV_BUY_MAX) ||
+        (rqSol >= SIGNAL_DEEP_MIN_SOL && rqSol < SIGNAL_DEEP_MAX_SOL);
+      if (!signal) continue;
       const capSol = Math.floor(Number(state.maxBuyLamports(mint))) / LAMPORTS;
       let amount = Math.min(capSol, STAKE_SOL);
       if (amount > free - tx) amount = free - tx;
