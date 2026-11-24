@@ -5,11 +5,11 @@
 // waits until a curve has proven itself (old enough that the launch dump is
 // over, several different wallets buying, net SOL still flowing in and the
 // price sitting near its recent high), then buys a small first stake and
-// only adds to the position while the tape stays strong. Every position
-// carries a hard stop, a trailing stop once it is in profit, a fade exit
-// when the flow turns, and a hard time limit, so no single coin can eat the
-// book. A small probe trade keeps the run on pace for the guardrail bar
-// (20+ coins, 200+ fills) when the momentum entries are running slow.
+// exits on a take-profit, a hard stop, a trailing stop once it is in
+// profit, a fade exit when the flow turns, and a hard time limit, so no
+// single coin can eat the book. No pyramid: one fixed-size buy per
+// position, because adds only fed the losers. A small probe trade keeps the
+// run on pace for the guardrail bar (20+ coins) when momentum entries run slow.
 //
 // Everything is a pure function of the replay stream: no clock, no
 // randomness, iteration only over insertion-ordered maps, so the two
@@ -34,14 +34,15 @@ const MAX_BUYER_SHARE = 0.6; // no single wallet may supply >60% of buy SOL
 const MIN_RQ_SOL = 2; // curve real SOL at entry: at least 2
 const MAX_RQ_SOL = 60; // ... at most 60 (bigger curves move too slowly)
 const MIN_AGE = 500; // slots since CreateEvent before an entry is allowed
-const STAKE_SOL = 2; // most SOL ever put into one position
-const FIRST_SOL = 0.05; // first buy of a position
-const ADD_SOL = 0.2; // each pyramid add
+const STAKE_SOL = 0.1; // most SOL ever put into one position (single buy, no pyramid)
+const FIRST_SOL = 0.1; // first buy of a position
+const ADD_SOL = 0; // pyramid adds: off — adds only fed the losers
 const MIN_BUY_SOL = 0.01; // smallest buy worth sending
-const BUY_SLIP_BPS = 1500; // slippage allowed on buys; sells go out wide open
-const STOP_LOSS = 0.2; // sell when value falls 20% under cost
-const TRAIL = 0.3; // sell when value falls 30% under its peak...
-const TRAIL_ARM = 0.05; // ...once the peak reached cost + 5%
+const BUY_SLIP_BPS = 300; // slippage allowed on buys; sells go out wide open
+const TAKE_PROFIT = 0.2; // sell the whole position once value reaches cost + 20%
+const STOP_LOSS = 0.08; // sell when value falls 8% under cost
+const TRAIL = 0.12; // sell when value falls 12% under its peak...
+const TRAIL_ARM = 0.08; // ...once the peak reached cost + 8%
 const FADE_NET_SOL = -0.5; // sell when 15-slot net flow drops under -0.5 SOL
 const BIG_SELL_SOL = 2; // sell on any single recorded sell of 2+ SOL
 const MAX_HOLD = 1500; // sell after this many slots held...
@@ -50,7 +51,7 @@ const COOLDOWN = 150; // slots to wait after an exit before re-entering a curve
 const MAX_ENTRIES = 2; // most entries per curve over the run
 const MAX_EXPOSURE_SOL = 6; // most SOL at cost across all positions at once
 const TARGET_COINS = 25; // guardrail pacing: coins to reach by end of window
-const TARGET_FILLS = 240; // guardrail pacing: fills to reach by end of window
+const TARGET_FILLS = 0; // no fill pacing: the guardrail counts coins, not fills
 const PACE_SECS = 14_400; // block-time span the pacing targets are spread over
 const PROBE_SOL = 0.02; // probe round-trip size (above the 0.01 SOL bar)
 const MAX_PROBES = 1; // most probe round trips open at once
@@ -242,6 +243,7 @@ await runBot({
       h.lastValue = value;
       let exit = h.exiting;
       const t = tapeOf(mint);
+      if (!exit && value >= cost * (1 + TAKE_PROFIT)) exit = true;
       if (!exit && value < cost * (1 - STOP_LOSS)) exit = true;
       if (!exit && h.peak >= cost * (1 + TRAIL_ARM) && value < h.peak * (1 - TRAIL)) exit = true;
       if (!exit && netFlow(t, now, FADE_WINDOW) < FADE_NET_SOL) exit = true;
@@ -288,7 +290,6 @@ await runBot({
       if (pendingByMint.has(mint) || probes.has(mint)) continue;
       const t = tapes.get(mint)!;
       const h = held.get(mint);
-      const price = priceOf(curve.virtual_quote_reserves, curve.virtual_token_reserves);
       const rqSol = Number(curve.real_quote_reserves) / LAMPORTS;
       let want: number;
       if (h === undefined) {
@@ -297,16 +298,8 @@ await runBot({
         if (!entryOk(t, now, rqSol)) continue;
         want = Math.min(FIRST_SOL, STAKE_SOL);
       } else {
-        // Pyramid into strength only: still in profit, price stepped up from
-        // the last add, and net SOL still flowing in over the entry window.
-        if (h.exiting || !h.filled || h.invested >= STAKE_SOL - MIN_BUY_SOL) continue;
-        const pos = state.positions.get(mint);
-        if (pos === undefined) continue;
-        if (price < h.lastAddPrice) continue;
-        if (h.lastValue < (Number(pos.cost_lamports) / LAMPORTS) * 1.0) continue;
-        if (netFlow(t, now, WINDOW) < MIN_NET_SOL) continue;
-        if (rqSol > MAX_RQ_SOL) continue;
-        want = Math.min(ADD_SOL, STAKE_SOL - h.invested);
+        // No pyramid: one fixed-size buy per position. Adds only fed losers.
+        continue;
       }
       const capSol = Math.floor(Number(state.maxBuyLamports(mint))) / LAMPORTS;
       let amount = Math.min(capSol, want, MAX_EXPOSURE_SOL - exposure);
