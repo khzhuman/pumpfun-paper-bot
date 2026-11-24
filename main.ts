@@ -36,7 +36,7 @@ const MIN_BUY_SOL = 0.01; // smallest buy worth paying the tx fee for
 const BUY_SLIP_BPS = 1500; // a buy whose price jumps more than 15% in the 2-slot latency is refused (free)
 const STOP_LOSS = 0.12; // sell when value falls 12% under cost
 const TRAIL_ARM = 0.1; // the trailing stop arms once value reaches cost + 10%
-const TRAIL_GIVEBACK = 0.15; // once armed, sell when value falls 15% below its best
+const TRAIL_GIVEBACK = 0.1; // once armed, sell when value falls 10% below its best
 const MAX_HOLD = 600; // sell after this many slots held
 
 interface TapePoint {
